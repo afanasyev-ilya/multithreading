@@ -5,6 +5,10 @@
 #include <chrono>
 #include <execution>
 #include <thread>
+#include <omp.h>
+#include <tbb/tbb.h>
+#include <tbb/parallel_for.h>
+
 
 constexpr bool print_arrays = false;
 
@@ -140,10 +144,154 @@ void bucket_sort(std::vector<float> &arr, int num_buckets) {
     }
 }
 
+void omp_bucket_sort(std::vector<float> &arr, int num_buckets, int num_threads) {
+    std::vector<std::atomic<int>> bucket_sizes(num_buckets);
+    std::vector<std::vector<float>> buckets(num_buckets);
+
+    std::vector<size_t> shifts(num_threads, 0);
+
+    #pragma omp parallel num_threads(num_threads) shared(shifts)
+    {
+        #pragma omp for schedule(static)
+        for(int bucket_idx = 0; bucket_idx < num_buckets; bucket_idx++) {
+            bucket_sizes[bucket_idx].store(0);
+        }
+
+        #pragma omp for schedule(static)
+        for(auto val: arr) {
+            int bucket_idx = val * num_buckets;
+            bucket_sizes[bucket_idx].fetch_add(1);
+        }
+
+        #pragma omp for schedule(static)
+        for(int bucket_idx = 0; bucket_idx < num_buckets; bucket_idx++) {
+            buckets[bucket_idx].resize(bucket_sizes[bucket_idx]);
+            bucket_sizes[bucket_idx].store(0);
+        }
+
+        #pragma omp for schedule(static)
+        for(auto val: arr) {
+            int bucket_idx = val * num_buckets;
+            int write_idx = bucket_sizes[bucket_idx].fetch_add(1);
+            buckets[bucket_idx][write_idx] = val;
+        }
+
+        #pragma omp for schedule(static)
+        for(auto &bucket: buckets) {
+            std::sort(bucket.begin(), bucket.end());
+        }
+
+        size_t write_count = 0;
+        #pragma omp for schedule(static)
+        for(const auto &bucket: buckets) {
+            write_count += bucket.size();
+        }
+        int tid = omp_get_thread_num();
+        shifts[tid] = write_count;
+
+        #pragma omp barrier
+        #pragma omp single
+        {
+            int prev = 0;
+            for(int i = 0; i < num_threads; i++) {
+                int num = shifts[i];
+                shifts[i] = prev;
+                prev += num;
+            }
+        }
+        #pragma omp barrier
+
+        size_t write_idx = 0;
+        size_t shift = shifts[tid];
+        #pragma omp for schedule(static)
+        for(const auto &bucket: buckets) {
+            for(auto val: bucket) {
+                arr[shift + write_idx] = val;
+                write_idx++;
+            }
+        }
+    }
+}
+
+void tbb_bucket_sort(std::vector<float> &arr, int num_buckets) {
+    std::vector<std::atomic<int>> bucket_sizes(num_buckets);
+    std::vector<std::vector<float>> buckets(num_buckets);
+
+    tbb::parallel_for(0, num_buckets, [&](int bucket_idx)
+    {
+        bucket_sizes[bucket_idx].store(0);
+    });
+
+    tbb::parallel_for(0, static_cast<int>(arr.size()), [&](int i)
+    {
+        float val = arr[i];
+        int bucket_idx = val * num_buckets;
+        bucket_sizes[bucket_idx].fetch_add(1);
+    });
+
+    tbb::parallel_for(0, num_buckets, [&](int bucket_idx)
+    {
+        buckets[bucket_idx].resize(bucket_sizes[bucket_idx]);
+        bucket_sizes[bucket_idx].store(0);
+    });
+
+    tbb::parallel_for(0, static_cast<int>(arr.size()), [&](int i)
+    {
+        float val = arr[i];
+        int bucket_idx = val * num_buckets;
+        int write_idx = bucket_sizes[bucket_idx].fetch_add(1);
+        buckets[bucket_idx][write_idx] = val;
+    });
+
+    tbb::parallel_for(0, num_buckets, [&](int bucket_idx)
+    {
+        std::sort(buckets[bucket_idx].begin(), buckets[bucket_idx].end());
+    });
+
+    /*size_t write_idx = 0;
+    for(const auto &bucket: buckets) {
+        for(auto val: bucket) {
+            arr[write_idx] = val;
+            write_idx++;
+        }
+    }*/
+
+    std::vector<int> sizes(num_buckets, 0);
+    tbb::parallel_for(0, num_buckets, [&](int bucket_idx)
+    {
+        sizes[bucket_idx] = buckets[bucket_idx].size();
+    });
+    std::vector<int> shifts(num_buckets, 0);
+
+    tbb::parallel_scan(
+        tbb::blocked_range<size_t>(0, num_buckets), 0,
+        [&sizes, &shifts](const tbb::blocked_range<size_t>& range, int sum, bool is_final) -> int {
+            int local_sum = sum;
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                shifts[i] = local_sum;
+                local_sum += sizes[i];
+            }
+            return local_sum;
+        },
+        [](int left_sum, int right_sum) -> int {
+            return left_sum + right_sum;
+        }
+    );
+
+    tbb::parallel_for(0, num_buckets, [&](int bucket_idx)
+    {
+        int i = 0;
+        for(auto val: buckets[bucket_idx]) {
+            arr[shifts[bucket_idx] + i] = val;
+            i++;
+        }
+    });
+}
+
 int main() {
     std::vector<float> data(1e6);
     int size = 1e7;
-    int iters = 4;
+    int iters = 3;
 
     for(int i = 0; i < iters; i++)
         time("first sequential quick sort, 1 thread", data, quick_sort<float>, 1);
@@ -155,6 +303,19 @@ int main() {
 
     for(int i = 0; i < iters; i++)
         time("bucket sort, sqrt(N)*2 buckets", data, bucket_sort, sqrt(data.size())*2);
+    std::cout << std::endl;
+
+    std::array<int, 4> omp_threads = {2, 4, 8};
+    for(auto threads: omp_threads) {
+        std::string name = "omp bucket sort, sqrt(N)*2 buckets," + std::to_string(threads) + " threads";
+        for(int i = 0; i < iters; i++)
+            time(name, data, omp_bucket_sort, sqrt(data.size())*2, threads);
+        std::cout << std::endl;
+    }
+
+    std::string name = "tbb bucket sort, sqrt(N)*2 buckets ";
+    for(int i = 0; i < iters; i++)
+        time(name, data, tbb_bucket_sort, sqrt(data.size())*2);
     std::cout << std::endl;
 
     return 0;
