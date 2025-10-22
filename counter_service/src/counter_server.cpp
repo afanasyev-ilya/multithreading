@@ -115,7 +115,8 @@ class Server {
             std::string cmd_name; 
             iss >> cmd_name;
 
-            std::cout << "tid " << tid << " recieved command " << cmd_name << std::endl;
+            // super verbose
+            // std::cout << "tid " << tid << " recieved command " << cmd_name << std::endl;
         
             if(cmd_name == "QUIT") {
                 reply_client(client_socket, "BYE\n");

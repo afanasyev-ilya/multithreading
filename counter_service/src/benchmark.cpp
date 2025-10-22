@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
         bool do_write = (pct(rng) < args.write_pct);
 
         std::string cmd;
-        if (do_write) { cmd = "INCR " + key + " 1\n"; }
+        if (do_write) { cmd = "INC " + key + " 1\n"; }
         else { cmd = "GET " + key + "\n"; }
 
         if (!write_all(fd, cmd)) break;
