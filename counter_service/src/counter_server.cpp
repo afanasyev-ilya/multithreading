@@ -18,12 +18,10 @@ struct Settings {
     bool verbose {};
 };
 
-volatile sig_atomic_t terminate_flag = 0;
 
 void signal_handler(int signum) {
     if (signum == SIGINT) {
         std::cout << "\nCtrl+C detected. Initiating graceful shutdown..." << std::endl;
-        terminate_flag = 1; // Set the flag to request termination
         throw std::string("external shut down");
     }
 }
@@ -46,8 +44,11 @@ class Server {
         }
 
         int opt = 1;
-        if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
-            throw std::string("setsockopt failed");
+        if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+            throw std::string("setsockopt (SO_REUSEADDR) failed");
+        }
+        if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
+            throw std::string("setsockopt (SO_REUSEPORT) failed");
         }
 
         sockaddr_in address;
@@ -72,54 +73,79 @@ class Server {
         close(server_fd);
     }
 
+    bool read_line(int fd, std::string& out, std::string& buf) {
+        // Look for '\n' in existing buffer first.
+        while (true) {
+            auto pos = buf.find('\n');
+            if (pos != std::string::npos) {
+                out = buf.substr(0, pos);
+                buf.erase(0, pos + 1);
+                return true;
+            }
+            char tmp[4096];
+            ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+            if (n == 0) return false; // peer closed
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                perror("recv");
+                return false;
+            }
+            buf.append(tmp, tmp + n);
+        }
+    }
+
     void reply_client(int client_socket, const std::string &reply) {
         send(client_socket, reply.c_str(), reply.size(), 0);
     }
 
     void handle_client(int client_socket) {
-        const int max_cmd_size = 1024;
-        char buffer[max_cmd_size] = {0};
-        recv(client_socket, buffer, max_cmd_size, 0);
+        std::string inbuf;
+        std::string command;
 
-        // we have command as pretty string now
-        std::string command(buffer);
+        while(true) {
+            if (!read_line(client_socket, command, inbuf)) 
+                break;
+            if (command.empty()) 
+                continue;
+
+            std::cout << "got command " << command << std::endl;
+
+            std::istringstream iss(command);
+            std::string cmd_name; 
+            iss >> cmd_name;
         
-        std::cout << "got command " << command << std::endl;
+            if(cmd_name == "QUIT") {
+                reply_client(client_socket, "BYE\n");
+            } else if (cmd_name == "STATS") {
+                std::ostringstream os;    
+                os << "STATS post counters=" << data.post_counters.size() << "\n";
+                reply_client(client_socket, os.str());
+            } else if (cmd_name == "INC") {
+                std::string key;
+                iss >> key;
 
-        std::istringstream iss(command);
-        std::string cmd_name; 
-        iss >> cmd_name;
-    
-        if(cmd_name == "QUIT") {
-            reply_client(client_socket, "BYE\n");
-        } else if (cmd_name == "STATS") {
-            std::ostringstream os;    
-            os << "STATS post counters=" << data.post_counters.size() << "\n";
-            reply_client(client_socket, os.str());
-        } else if (cmd_name == "INC") {
-            std::string key;
-            iss >> key;
+                int change = 1;
+                iss >> change;
 
-            int change = 1;
-            iss >> change;
+                data.post_counters[key] += change;
+                reply_client(client_socket, "OK\n");
+            } else if (cmd_name == "GET") {
+                std::string key;
+                iss >> key;
 
-            data.post_counters[key] += change;
-            reply_client(client_socket, "OK\n");
-        } else if (cmd_name == "GET") {
-            std::string key;
-            iss >> key;
+                std::string reply;
+                auto it = data.post_counters.find(key);
+                if(it != data.post_counters.end()) {
+                    reply = "VALUE = " + std::to_string(it->second) + "\n";
+                } else {
+                    reply = "key not found\n";
+                }
 
-            std::string reply;
-            auto it = data.post_counters.find(key);
-            if(it != data.post_counters.end()) {
-                reply = "VALUE = " + std::to_string(it->second) + "\n";
+                reply_client(client_socket, reply);
             } else {
-                reply = "key not found\n";
+                continue;
             }
-
-            reply_client(client_socket, reply);
-        } else {
-            throw std::string("got unknown command");
         }
     }
 public:
@@ -139,10 +165,11 @@ public:
         while(true) {
             // waiting for clients connections
             sockaddr_in cli{}; socklen_t clilen = sizeof(cli);
-            
+    
             int client_socket = accept(server_fd, reinterpret_cast<sockaddr*>(&cli), &clilen);
+
             if (client_socket < 0) {
-                std::string("Problem with listening to socket");
+                throw std::string("Problem with listening to socket");
             }
 
             if (verbose) {
