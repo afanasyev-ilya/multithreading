@@ -13,11 +13,13 @@
 #include <unistd.h>
 #include <csignal> // For signal handling
 #include <unistd.h> // For sleep (optional, for demonstration)
+#include <mutex>
 
 
 struct Settings {
     int port {};
     bool verbose {};
+    int num_threads {};
 };
 
 
@@ -29,15 +31,23 @@ void signal_handler(int signum) {
 }
 
 
+size_t get_shard_index(const std::string& key, size_t num_shards) {
+    return std::hash<std::string>{}(key) % num_shards;
+}
+
+
 struct ServerData {
     std::unordered_map<std::string, int> post_counters;
+    std::mutex mtx;
 };
 
 class Server {
     int server_fd;
     const int q_size = 512;
 
-    ServerData data;
+    int num_shards;
+    int num_threads;
+    std::vector<ServerData> shards;
 
     void connect_to_socket(int port) {
         server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -121,8 +131,13 @@ class Server {
             if(cmd_name == "QUIT") {
                 reply_client(client_socket, "BYE\n");
             } else if (cmd_name == "STATS") {
-                std::ostringstream os;    
-                os << "STATS post counters=" << data.post_counters.size() << "\n";
+                std::ostringstream os;
+                
+                int sum_size = 0;
+                for(const auto &shard: shards) {
+                    sum_size += shard.post_counters.size();
+                }
+                os << "STATS post counters=" << sum_size << "\n";
                 reply_client(client_socket, os.str());
             } else if (cmd_name == "INC") {
                 std::string key;
@@ -131,18 +146,27 @@ class Server {
                 int change = 1;
                 iss >> change;
 
-                data.post_counters[key] += change;
+                // Hash key to determine which shard to use
+                size_t shard_idx = get_shard_index(key, num_shards);
+                {
+                    std::lock_guard<std::mutex> lock(shards[shard_idx].mtx);
+                    shards[shard_idx].post_counters[key] += change;
+                }
+
                 reply_client(client_socket, "OK\n");
             } else if (cmd_name == "GET") {
                 std::string key;
                 iss >> key;
 
                 std::string reply;
-                auto it = data.post_counters.find(key);
-                if(it != data.post_counters.end()) {
-                    reply = "VALUE = " + std::to_string(it->second) + "\n";
-                } else {
-                    reply = "key not found\n";
+                size_t shard_idx = get_shard_index(key, num_shards);
+                {
+                    std::lock_guard<std::mutex> lock(shards[shard_idx].mtx);
+                    auto it = shards[shard_idx].post_counters.find(key);
+                    if (it != shards[shard_idx].post_counters.end())
+                        reply = "VALUE " + std::to_string(it->second) + "\n";
+                    else
+                        reply = "key not found\n";
                 }
 
                 reply_client(client_socket, reply);
@@ -152,7 +176,7 @@ class Server {
         }
     }
 public:
-    Server(int port) {
+    Server(int threads, int port): num_shards(threads), num_threads(threads), shards(threads) {
         // for now outside of class
         std::signal(SIGINT, signal_handler);
 
@@ -188,10 +212,10 @@ public:
         }
     }
 
-    void run(int num_threads, bool verbose) {
+    void run(bool verbose) {
         std::vector<std::thread> threads;
 
-        for(int i = 0; i < num_threads; i++) {
+        for(int i = 0; i < this->num_threads; i++) {
             threads.push_back(std::move(std::thread(&Server::thread_worker, this, verbose)));
         }
 
@@ -203,14 +227,51 @@ public:
     }
 };
 
-int main() {
+int load_cli_settings(Settings &settings, int argc, char* argv[]) {
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-p" || arg == "--port") {
+            if (i + 1 < argc) { // Check if there's a next argument for the port number
+                try {
+                    settings.port = std::stoi(argv[++i]); // Convert string to integer and advance index
+                } catch (const std::invalid_argument& e) {
+                    std::cerr << "Error: Invalid port number provided." << std::endl;
+                    return 1; // Exit with error
+                } catch (const std::out_of_range& e) {
+                    std::cerr << "Error: Port number out of range." << std::endl;
+                    return 1; // Exit with error
+                }
+            } else {
+                std::cerr << "Error: --port option requires an argument." << std::endl;
+                return 1; // Exit with error
+            }
+        } else if (arg == "-t" || arg == "--threads") {
+            if (i + 1 < argc) { // Check if there's a next argument for the port number
+                try {
+                    settings.num_threads = std::stoi(argv[++i]); // Convert string to integer and advance index
+                } catch (const std::invalid_argument& e) {
+                    std::cerr << "Error: Invalid port number provided." << std::endl;
+                    return 1; // Exit with error
+                } catch (const std::out_of_range& e) {
+                    std::cerr << "Error: Port number out of range." << std::endl;
+                    return 1; // Exit with error
+                }
+            } else {
+                std::cerr << "Error: --port option requires an argument." << std::endl;
+                return 1; // Exit with error
+            }
+        }
+    }   
+}
+
+int main(int argc, char* argv[]) {
     try {
-        const int num_threads = 4;
+        Settings settings = {.port = 9000, .verbose = true, .num_threads = 4};
 
-        Settings settings = {.port = 9000, .verbose = true};
+        load_cli_settings(settings, argc, argv);
 
-        Server server(settings.port);
-        server.run(num_threads, settings.verbose);
+        Server server(settings.num_threads, settings.port);
+        server.run(settings.verbose);
     } catch (const std::string &error) {
         std::cout << "Got critical error " << error << ", aborting..." << std::endl;
     }
