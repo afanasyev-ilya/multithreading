@@ -162,11 +162,10 @@ public:
         close_socket();
     }
 
-    void thread_worker() {
+    void thread_worker(bool verbose) {
         std::thread::id tid = std::this_thread::get_id();
         std::cout << "Server thread created, Thread ID: " << tid << std::endl;
 
-        bool verbose = true;
         while(true) {
             // waiting for clients connections
             sockaddr_in cli{}; socklen_t clilen = sizeof(cli);
@@ -192,7 +191,7 @@ public:
         std::vector<std::thread> threads;
 
         for(int i = 0; i < num_threads; i++) {
-            threads.emplace_back(&Server::thread_worker, this);
+            threads.push_back(std::move(std::thread(&Server::thread_worker, this, verbose)));
         }
 
         for(auto &thread: threads) {
