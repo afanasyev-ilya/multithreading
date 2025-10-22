@@ -3,6 +3,8 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <thread>
+#include <vector>
 
 
 #include <sys/socket.h>
@@ -99,7 +101,7 @@ class Server {
         send(client_socket, reply.c_str(), reply.size(), 0);
     }
 
-    void handle_client(int client_socket) {
+    void handle_client(int client_socket, std::thread::id tid) {
         std::string inbuf;
         std::string command;
 
@@ -109,11 +111,11 @@ class Server {
             if (command.empty()) 
                 continue;
 
-            std::cout << "got command " << command << std::endl;
-
             std::istringstream iss(command);
             std::string cmd_name; 
             iss >> cmd_name;
+
+            std::cout << "tid " << tid << " recieved command " << cmd_name << std::endl;
         
             if(cmd_name == "QUIT") {
                 reply_client(client_socket, "BYE\n");
@@ -160,8 +162,11 @@ public:
         close_socket();
     }
 
-    void run(bool verbose) {
-         // while (terminate_flag == 0) {
+    void thread_worker() {
+        std::thread::id tid = std::this_thread::get_id();
+        std::cout << "Server thread created, Thread ID: " << tid << std::endl;
+
+        bool verbose = true;
         while(true) {
             // waiting for clients connections
             sockaddr_in cli{}; socklen_t clilen = sizeof(cli);
@@ -178,18 +183,34 @@ public:
                 std::cerr << "Accepted connection from " << ip << ":" << ntohs(cli.sin_port) << "\n";
             }
 
-            handle_client(client_socket);
+            handle_client(client_socket, tid);
             close(client_socket);
         }
+    }
+
+    void run(int num_threads, bool verbose) {
+        std::vector<std::thread> threads;
+
+        for(int i = 0; i < num_threads; i++) {
+            threads.emplace_back(&Server::thread_worker, this);
+        }
+
+        for(auto &thread: threads) {
+            thread.join();
+        }
+
+        std::cout << "Master thread finished" << std::endl;
     }
 };
 
 int main() {
     try {
+        const int num_threads = 4;
+
         Settings settings = {.port = 9000, .verbose = true};
 
         Server server(settings.port);
-        server.run(settings.verbose);
+        server.run(num_threads, settings.verbose);
     } catch (const std::string &error) {
         std::cout << "Got critical error " << error << ", aborting..." << std::endl;
     }
