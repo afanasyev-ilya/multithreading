@@ -5,9 +5,9 @@
 
 struct Settings {
     int num_requests {100000000};
-    int max_posts {100000};
+    int max_posts {10000000};
     int reads_per_write {50};
-    int num_threads {1};
+    int max_threads {1};
     int num_shards {128};
 };
 
@@ -180,10 +180,10 @@ void load_cli_settings(Settings &settings, int argc, char* argv[]) {
                  });
 
     // -t / --threads / --num-threads
-    p.add_option({"-t", "--threads", "--num-threads"}, "INT",
-                 "Number of worker threads (default: " + std::to_string(settings.num_threads) + ")",
+    p.add_option({"-t", "--threads", "--max-threads"}, "INT",
+                 "Number of worker threads (default: " + std::to_string(settings.max_threads) + ")",
                  [&](const std::string& v) {
-                     settings.num_threads = to_int(v, "--threads");
+                     settings.max_threads = to_int(v, "--threads");
                  });
 
     // --posts

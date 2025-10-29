@@ -246,37 +246,44 @@ int main(int argc, char* argv[]) {
     // gen input data
     auto cmds = gen.gen_batch(settings.num_requests, settings.max_posts, settings.reads_per_write);
 
-    // start parallel workflow
-    auto start_time = std::chrono::high_resolution_clock::now();
-
-    std::vector<std::thread> threads;
-
     const int total_work = cmds.size();
-    const int work_per_thread = (total_work - 1) / settings.num_threads + 1;
     std::cout << "num shards: " << settings.num_shards << std::endl;
     std::cout << "estimated num posts : " << settings.max_posts << std::endl;
     std::cout << "   posts per shard : " << (settings.max_posts - 1)/settings.num_shards + 1 << std::endl;
+    std::cout << "   estimated data size : " << (settings.max_posts * sizeof(int)) / 1e6 << " MB" << std::endl;
     std::cout << "reads to writes ratio: " << settings.reads_per_write << std::endl;
     std::cout << "total requests (commands) : " << total_work << std::endl;
-    std::cout << "work_per_thread (commands) : " << work_per_thread << std::endl;
+    std::cout << "avg cmds per post : " << total_work / settings.max_posts << std::endl;
 
+    std::vector<double> thread_times;
+    for(int num_threads = 1; num_threads <= settings.max_threads; num_threads *= 2) {
+        std::vector<std::thread> threads;
 
-    for(int thread_idx = 0; thread_idx < settings.num_threads; thread_idx++) {
-        threads.emplace_back([&, thread_idx]() {
-            int start_cmd = thread_idx * work_per_thread;
-            int end_cmd = std::min((thread_idx + 1) * work_per_thread, total_work);
-            WorkloadManager mgr(post_data);
-            mgr.run(cmds, start_cmd, end_cmd);
-        });
+        const int work_per_thread = (total_work - 1) / num_threads + 1;
+        auto start_time = std::chrono::high_resolution_clock::now();
+
+        for(int thread_idx = 0; thread_idx < num_threads; thread_idx++) {
+            threads.emplace_back([&, thread_idx]() {
+                int start_cmd = thread_idx * work_per_thread;
+                int end_cmd = std::min((thread_idx + 1) * work_per_thread, total_work);
+                WorkloadManager mgr(post_data);
+                mgr.run(cmds, start_cmd, end_cmd);
+            });
+        }
+
+        for(auto &thread: threads) {
+            thread.join();
+        }
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        thread_times.push_back(duration_ms.count());
     }
 
-    for(auto &thread: threads) {
-        thread.join();
+    int num_threads = 1;
+    for(auto thread_time: thread_times) {
+        std::cout << num_threads << " threads) " << thread_time << " ms (" << thread_times[0]/thread_time << "x)" << std::endl;
+        num_threads *= 2;
     }
-
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-    std::cout << "WALL time: " << duration_ms.count() << " ms" << std::endl;
 
     return 0;
 }
