@@ -97,8 +97,12 @@ public:
 };
 
 
+bool isPowerOfTwo(unsigned int n) { // Use unsigned for popcount
+    return (n > 0) && (std::popcount(n) == 1);
+}
+
 class ShardedDistributedCounter : public BaseCounter {
-    struct Shard {
+    struct alignas(64) Shard {
         std::unordered_map<int, int> counters_;
         mutable std::shared_mutex mtx_;
 
@@ -108,12 +112,23 @@ class ShardedDistributedCounter : public BaseCounter {
     int num_shards_;
     std::vector<Shard> shards_;
 
-    int get_shard_idx(int post_id) {
-        return post_id % num_shards_;
+    size_t mask_{0};
+    std::hash<int> hasher_;
+
+    // Hash+mask avoids expensive division and spreads clustered IDs
+    inline int get_shard_idx(int post_id) const noexcept {
+        return hasher_(post_id) & mask_;
     }
+
+    /*inline int get_shard_idx(int post_id) const noexcept {
+        returnpost_id % num_shards_;
+    }*/
 public:
     explicit ShardedDistributedCounter(int num_shards, int expected_posts) : num_shards_(num_shards), shards_(num_shards_) {
         int posts_per_shard = (expected_posts - 1) / num_shards + 1;
+
+        assert(isPowerOfTwo(num_shards_));
+        mask_ = num_shards_ - 1;
 
         for(auto &shard: shards_) {
             shard.reserve(posts_per_shard);
@@ -143,7 +158,6 @@ public:
         }
     }
 };
-
 
 
 enum OperationType {
@@ -240,9 +254,12 @@ int main(int argc, char* argv[]) {
     const int total_work = cmds.size();
     const int work_per_thread = (total_work - 1) / settings.num_threads + 1;
     std::cout << "num shards: " << settings.num_shards << std::endl;
+    std::cout << "estimated num posts : " << settings.max_posts << std::endl;
+    std::cout << "   posts per shard : " << (settings.max_posts - 1)/settings.num_shards + 1 << std::endl;
     std::cout << "reads to writes ratio: " << settings.reads_per_write << std::endl;
-    std::cout << "total_work : " << total_work << std::endl;
-    std::cout << "work_per_thread : " << work_per_thread << std::endl;
+    std::cout << "total requests (commands) : " << total_work << std::endl;
+    std::cout << "work_per_thread (commands) : " << work_per_thread << std::endl;
+
 
     for(int thread_idx = 0; thread_idx < settings.num_threads; thread_idx++) {
         threads.emplace_back([&, thread_idx]() {

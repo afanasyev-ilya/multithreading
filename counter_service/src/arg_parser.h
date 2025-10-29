@@ -5,7 +5,7 @@
 
 struct Settings {
     int num_requests {100000000};
-    int max_posts {10000};
+    int max_posts {100000};
     int reads_per_write {50};
     int num_threads {1};
     int num_shards {128};
