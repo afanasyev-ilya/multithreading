@@ -19,12 +19,12 @@ public:
     virtual int get_views(int post_id) = 0;
 };
 
-class DistributedCounter: public BaseCounter {
+class LockMap: public BaseCounter {
     std::unordered_map<int, int> counters_;
     std::shared_mutex mtx_;
 
 public:
-    explicit DistributedCounter(int expected_posts = 0) {
+    explicit LockMap(int expected_posts = 0) {
         if(expected_posts > 0) {
             counters_.reserve(expected_posts);
         }
@@ -48,18 +48,26 @@ public:
 };
 
 
-class AtomicDistributedCounter : public BaseCounter {
+class AtomicArray : public BaseCounter {
+    int max_id_;
     std::vector<std::atomic<int>> counters_; 
 public:
-    explicit AtomicDistributedCounter(size_t max_posts): counters_(max_posts) {
-
+    explicit AtomicArray(size_t max_posts): max_id_(max_posts + 1), counters_(max_id_) {
+        for(auto &val: counters_) 
+            val = 0;
+        max_id_ = max_posts + 1;
     }
 
     void add_view(int post_id) {
-        
+        if(post_id < max_id_) {
+            counters_[post_id].fetch_add(1, std::memory_order_relaxed);
+        }
     }
 
     int get_views(int post_id) {
+        if(post_id < max_id_) {
+            return counters_[post_id].load(std::memory_order_relaxed);
+        }
         return 0;
     }
 };
@@ -69,7 +77,7 @@ bool isPowerOfTwo(unsigned int n) { // Use unsigned for popcount
     return (n > 0) && (std::popcount(n) == 1);
 }
 
-class ShardedDistributedCounter : public BaseCounter {
+class ShardedMap : public BaseCounter {
     struct alignas(64) Shard {
         std::unordered_map<int, int> counters_;
         mutable std::shared_mutex mtx_;
@@ -92,7 +100,7 @@ class ShardedDistributedCounter : public BaseCounter {
         returnpost_id % num_shards_;
     }*/
 public:
-    explicit ShardedDistributedCounter(int num_shards, int expected_posts) : num_shards_(num_shards), shards_(num_shards_) {
+    explicit ShardedMap(int num_shards, int expected_posts) : num_shards_(num_shards), shards_(num_shards_) {
         int posts_per_shard = (expected_posts - 1) / num_shards + 1;
 
         assert(isPowerOfTwo(num_shards_));
@@ -195,7 +203,8 @@ int main(int argc, char* argv[]) {
     load_cli_settings(settings, argc, argv);
 
     // DistributedCounter post_data;
-    ShardedDistributedCounter post_data(settings.num_shards, settings.max_posts);
+    // ShardedDistributedCounter post_data(settings.num_shards, settings.max_posts);
+    AtomicArray post_data(settings.max_posts);
 
     RequestGenerator gen;
 

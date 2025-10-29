@@ -3,12 +3,18 @@
 #include <stdexcept>
 #include <cctype>
 
+enum DSType {
+    SHARDED = 1,
+    ATOMICS_ARRAY = 2,
+    LOCK_MAP = 3
+};
 struct Settings {
     int num_requests {static_cast<int>(1e8)};
     int max_posts {static_cast<int>(1e6)};
     int reads_per_write {50};
     int max_threads {1};
     int num_shards {128};
+    DSType ds {SHARDED};
 };
 
 class ArgParser {
@@ -202,13 +208,22 @@ void load_cli_settings(Settings &settings, int argc, char* argv[]) {
                          throw std::runtime_error("--reads-per-write must be >= 1");
                  });
 
-    // --reads-per-write
+    // --num shards
     p.add_option({"--shards"}, "INT",
                  "Number of shards (>=1) (default: " + std::to_string(settings.num_shards) + ")",
                  [&](const std::string& v) {
                      settings.num_shards = to_int(v, "--shards");
-                     if (settings.reads_per_write < 1)
+                     if (settings.num_shards < 1)
                          throw std::runtime_error("--shards >= 1");
+                 });
+
+    // --num shards
+    p.add_option({"--ds"}, "INT",
+                 "Type of datastructure used, 1 = sharded, 2 = atomics, 3 = lock map, default " + std::to_string(settings.ds) + "(sharded) )",
+                 [&](const std::string& v) {
+                     settings.ds = static_cast<DSType>(to_int(v, "--ds"));
+                     if (settings.ds < 1 || settings.ds > 3)
+                         throw std::runtime_error("--ds >= 1");
                  });
 
     try {
