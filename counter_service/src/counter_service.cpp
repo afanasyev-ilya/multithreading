@@ -114,6 +114,7 @@ class ShardedDistributedCounter : public BaseCounter {
 public:
     explicit ShardedDistributedCounter(int num_shards, int expected_posts) : num_shards_(num_shards), shards_(num_shards_) {
         int posts_per_shard = (expected_posts - 1) / num_shards + 1;
+
         for(auto &shard: shards_) {
             shard.reserve(posts_per_shard);
         }
@@ -121,7 +122,7 @@ public:
 
     void add_view(int post_id) {
         int shard_idx = get_shard_idx(post_id);
-        Shard &shard = shards_[shard_idx];
+        auto &shard = shards_[shard_idx];
         {
             std::unique_lock<std::shared_mutex> lock(shard.mtx_);
             shard.counters_[post_id]++;
@@ -130,7 +131,7 @@ public:
 
     int get_views(int post_id) {
         int shard_idx = get_shard_idx(post_id);
-        Shard &shard = shards_[shard_idx];
+        auto &shard = shards_[shard_idx];
         {
             std::unique_lock<std::shared_mutex> lock(shard.mtx_);
             auto it = shard.counters_.find(post_id);
