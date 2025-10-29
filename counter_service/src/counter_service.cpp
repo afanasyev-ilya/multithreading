@@ -17,12 +17,13 @@ protected:
 public:
     virtual void add_view(int post_id) = 0;
     virtual int get_views(int post_id) = 0;
+
+    virtual ~BaseCounter() = default;
 };
 
 class LockMap: public BaseCounter {
     std::unordered_map<int, int> counters_;
     std::shared_mutex mtx_;
-
 public:
     explicit LockMap(int expected_posts = 0) {
         if(expected_posts > 0) {
@@ -181,19 +182,19 @@ public:
 };
 
 class WorkloadManager {
-    BaseCounter &data_;
+    BaseCounter *data_;
 
 public:
-    WorkloadManager(BaseCounter &data) : data_(data) {
+    WorkloadManager(BaseCounter *data) : data_(data) {
 
     }
     void run(const std::vector<Request> &cmds, int start_cmd, int end_cmd) {
         for(int cmd_id = start_cmd; cmd_id < end_cmd; cmd_id++) {
             const auto &cmd = cmds[cmd_id];
             if(cmd.op_type == GET_VIEWS)
-                data_.get_views(cmd.post_id);
+                data_->get_views(cmd.post_id);
             if(cmd.op_type == ADD_VIEW)
-                data_.add_view(cmd.post_id);
+                data_->add_view(cmd.post_id);
         }
     }
 };
@@ -202,9 +203,24 @@ int main(int argc, char* argv[]) {
     Settings settings;
     load_cli_settings(settings, argc, argv);
 
-    // DistributedCounter post_data;
-    // ShardedDistributedCounter post_data(settings.num_shards, settings.max_posts);
-    AtomicArray post_data(settings.max_posts);
+    std::unique_ptr<BaseCounter> post_data;
+
+    switch(settings.ds) {
+        case SHARDED_MAP:
+            std::cout << "USING SHARDED MAP" << std::endl;
+            post_data = std::make_unique<ShardedMap>(settings.num_shards, settings.max_posts);
+            break;
+        case ATOMICS_ARRAY:
+            std::cout << "USING ATOMICS_ARRAY" << std::endl;
+            post_data = std::make_unique<AtomicArray>(settings.max_posts);
+            break;
+        case LOCK_MAP:
+            std::cout << "USING LOCK_MAP" << std::endl;
+            post_data = std::make_unique<LockMap>();
+            break;
+        default:
+            break;
+    }
 
     RequestGenerator gen;
 
@@ -231,7 +247,7 @@ int main(int argc, char* argv[]) {
             threads.emplace_back([&, thread_idx]() {
                 int start_cmd = thread_idx * work_per_thread;
                 int end_cmd = std::min((thread_idx + 1) * work_per_thread, total_work);
-                WorkloadManager mgr(post_data);
+                WorkloadManager mgr(post_data.get());
                 mgr.run(cmds, start_cmd, end_cmd);
             });
         }

@@ -4,7 +4,7 @@
 #include <cctype>
 
 enum DSType {
-    SHARDED = 1,
+    SHARDED_MAP = 1,
     ATOMICS_ARRAY = 2,
     LOCK_MAP = 3
 };
@@ -14,7 +14,7 @@ struct Settings {
     int reads_per_write {50};
     int max_threads {1};
     int num_shards {128};
-    DSType ds {SHARDED};
+    DSType ds {SHARDED_MAP};
 };
 
 class ArgParser {
