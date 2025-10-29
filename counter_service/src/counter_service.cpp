@@ -8,6 +8,7 @@
 #include <mutex>
 #include <chrono>
 #include <cassert>
+#include <memory>
 
 class BaseCounter {
 protected:
@@ -17,8 +18,8 @@ public:
     virtual void add_view(int post_id) = 0;
     virtual int get_views(int post_id) = 0;
 
-    int get_read_ops() const { return read_ops_;};
-    int get_write_ops() const { return write_ops_;};
+    int get_read_ops() const  { return read_ops_.load(std::memory_order_relaxed); }
+    int get_write_ops() const { return write_ops_.load(std::memory_order_relaxed); }
 };
 
 class DistributedCounter: public BaseCounter {
@@ -26,7 +27,7 @@ class DistributedCounter: public BaseCounter {
     std::shared_mutex mtx_;
 
 public:
-    DistributedCounter(int expected_posts = 0) {
+    explicit DistributedCounter(int expected_posts = 0) {
         if(expected_posts > 0) {
             counters_.reserve(expected_posts);
         }
@@ -51,6 +52,56 @@ public:
         }
     }
 };
+
+
+class AtomicDistributedCounter : public BaseCounter {
+    // Map post_id -> stable pointer to an atomic counter.
+    // After a key exists, increments/loads don't need to hold the map lock.
+    std::unordered_map<int, std::shared_ptr<std::atomic<int>>> counters_;
+    mutable std::shared_mutex mtx_;
+public:
+    // Optional: let callers pre-reserve if they know the cardinality.
+    explicit AtomicDistributedCounter(size_t expected_posts = 0) {
+        if (expected_posts) counters_.reserve(expected_posts);
+    }
+
+    void add_view(int post_id) {
+        // Fast path: find under shared lock, then increment without holding the lock.
+        {
+            std::shared_lock<std::shared_mutex> rlock(mtx_);
+            auto it = counters_.find(post_id);
+            if (it != counters_.end()) {
+                it->second->fetch_add(1, std::memory_order_relaxed);
+                write_ops_.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+        }
+
+        // Slow path: insert the counter once under exclusive lock.
+        {
+            std::unique_lock<std::shared_mutex> wlock(mtx_);
+            // Another thread may have inserted meanwhile; try_emplace handles both cases.
+            auto [it, inserted] =
+                counters_.try_emplace(post_id, std::make_shared<std::atomic<int>>(0));
+            it->second->fetch_add(1, std::memory_order_relaxed);
+            write_ops_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    int get_views(int post_id) {
+        std::shared_ptr<std::atomic<int>> ptr;
+        {
+            std::shared_lock<std::shared_mutex> rlock(mtx_);
+            auto it = counters_.find(post_id);
+            if (it != counters_.end()) ptr = it->second; // copy shared_ptr while locked
+        }
+        read_ops_.fetch_add(1, std::memory_order_relaxed);
+        if (!ptr) return 0;
+        return ptr->load(std::memory_order_relaxed);
+    }
+};
+
+
 
 enum OperationType {
     GET_VIEWS = 0,
@@ -192,7 +243,8 @@ int main(int argc, char* argv[]) {
     Settings settings;
     load_cli_settings(settings, argc, argv);
 
-    DistributedCounter post_data;
+    // DistributedCounter post_data;
+    AtomicDistributedCounter post_data;
 
     RequestGenerator gen;
 
