@@ -22,11 +22,20 @@ struct Settings {
     int num_threads {};
 };
 
+volatile sig_atomic_t terminate_flag = 0;
 
-void signal_handler(int signum) {
-    if (signum == SIGINT) {
-        std::cout << "\nCtrl+C detected. Initiating graceful shutdown..." << std::endl;
-        throw std::string("external shut down");
+void sigint_handler(int signum) {
+    std::cout << "\nCtrl+C detected. Initiating graceful shutdown..." << std::endl;
+    terminate_flag = 1;
+}
+
+static void install_sigint_handler() {
+    struct sigaction sa{};
+    sa.sa_handler = sigint_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; // no SA_RESTART
+    if (sigaction(SIGINT, &sa, nullptr) < 0) {
+        perror("sigaction(SIGINT)");
     }
 }
 
@@ -39,6 +48,7 @@ size_t get_shard_index(const std::string& key, size_t num_shards) {
 struct ServerData {
     std::unordered_map<std::string, int> post_counters;
     std::mutex mtx;
+    size_t requests;
 };
 
 class Server {
@@ -115,7 +125,7 @@ class Server {
         std::string inbuf;
         std::string command;
 
-        while(true) {
+        while(!terminate_flag) {
             if (!read_line(client_socket, command, inbuf)) 
                 break;
             if (command.empty()) 
@@ -151,6 +161,7 @@ class Server {
                 {
                     std::lock_guard<std::mutex> lock(shards[shard_idx].mtx);
                     shards[shard_idx].post_counters[key] += change;
+                    shards[shard_idx].requests++;
                 }
 
                 reply_client(client_socket, "OK\n");
@@ -167,6 +178,7 @@ class Server {
                         reply = "VALUE " + std::to_string(it->second) + "\n";
                     else
                         reply = "key not found\n";
+                    shards[shard_idx].requests++;
                 }
 
                 reply_client(client_socket, reply);
@@ -178,7 +190,7 @@ class Server {
 public:
     Server(int threads, int port): num_shards(threads), num_threads(threads), shards(threads) {
         // for now outside of class
-        std::signal(SIGINT, signal_handler);
+        install_sigint_handler();
 
         connect_to_socket(port);
     }
@@ -191,7 +203,7 @@ public:
         std::thread::id tid = std::this_thread::get_id();
         std::cout << "Server thread created, Thread ID: " << tid << std::endl;
 
-        while(true) {
+        while(!terminate_flag) {
             // waiting for clients connections
             sockaddr_in cli{}; socklen_t clilen = sizeof(cli);
     
