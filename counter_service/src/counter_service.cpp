@@ -9,14 +9,29 @@
 #include <chrono>
 #include <cassert>
 
-
-class DistributedCounter {
-    std::unordered_map<int, int> counters_;
-    std::shared_mutex mtx_;
+class BaseCounter {
+protected:
     std::atomic<int> read_ops_{0};
     std::atomic<int> write_ops_{0};
+public:
+    virtual void add_view(int post_id) = 0;
+    virtual int get_views(int post_id) = 0;
+
+    int get_read_ops() const { return read_ops_;};
+    int get_write_ops() const { return write_ops_;};
+};
+
+class DistributedCounter: public BaseCounter {
+    std::unordered_map<int, int> counters_;
+    std::shared_mutex mtx_;
 
 public:
+    DistributedCounter(int expected_posts = 0) {
+        if(expected_posts > 0) {
+            counters_.reserve(expected_posts);
+        }
+    }
+
     void add_view(int post_id) {
         std::unique_lock<std::shared_mutex> lock(mtx_);
 
@@ -35,9 +50,6 @@ public:
             return it->second;
         }
     }
-
-    int get_read_ops() const { return read_ops_;};
-    int get_write_ops() const { return write_ops_;};
 };
 
 enum OperationType {
@@ -85,7 +97,7 @@ public:
 };
 
 class WorkloadManager {
-    DistributedCounter &data_;
+    BaseCounter &data_;
 
     void print_stats(double duration_ms) {
         int ops = data_.get_read_ops() + data_.get_write_ops();
@@ -95,7 +107,7 @@ class WorkloadManager {
         std::cout << "inner mQPS: " << QPS/1e6 << std::endl;
     }
 public:
-    WorkloadManager(DistributedCounter &data) : data_(data) {
+    WorkloadManager(BaseCounter &data) : data_(data) {
 
     }
     void run(const std::vector<Request> &cmds, int start_cmd, int end_cmd) {
