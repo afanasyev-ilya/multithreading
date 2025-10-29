@@ -28,12 +28,12 @@ public:
     int get_views(int post_id) {
         std::unique_lock<std::shared_mutex> lock(mtx_);
         auto it = counters_.find(post_id);
+        read_ops_++;
         if(it == counters_.end()) {
             return 0;
         } else {
             return it->second;
         }
-        read_ops_++;
     }
 
     int get_read_ops() const { return read_ops_;};
@@ -99,8 +99,8 @@ public:
 
     }
     void run(const std::vector<Request> &cmds, int start_cmd, int end_cmd) {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        std::cout << "thread borders " << start_cmd << " - " << end_cmd << std::endl;
+        //auto start_time = std::chrono::high_resolution_clock::now();
+        //std::cout << "thread borders " << start_cmd << " - " << end_cmd << std::endl;
         for(int cmd_id = start_cmd; cmd_id < end_cmd; cmd_id++) {
             const auto &cmd = cmds[cmd_id];
             if(cmd.op_type == GET_VIEWS)
@@ -108,9 +108,9 @@ public:
             if(cmd.op_type == ADD_VIEW)
                 data_.add_view(cmd.post_id);
         }
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-        print_stats(duration_ms.count());
+        //auto end_time = std::chrono::high_resolution_clock::now();
+        //auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        //print_stats(duration_ms.count());
     }
 };
 
