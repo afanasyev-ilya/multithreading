@@ -100,7 +100,7 @@ public:
 class ShardedDistributedCounter : public BaseCounter {
     struct Shard {
         std::unordered_map<int, int> counters_;
-        std::shared_mutex mtx_;
+        mutable std::shared_mutex mtx_;
 
         void reserve(int size) {counters_.reserve(size); };
     };
@@ -133,9 +133,8 @@ public:
         int shard_idx = get_shard_idx(post_id);
         auto &shard = shards_[shard_idx];
         {
-            std::unique_lock<std::shared_mutex> lock(shard.mtx_);
+            std::shared_lock<std::shared_mutex> lock(shard.mtx_);
             auto it = shard.counters_.find(post_id);
-            read_ops_++;
             if(it == shard.counters_.end()) {
                 return 0;
             } else {
@@ -240,6 +239,8 @@ int main(int argc, char* argv[]) {
 
     const int total_work = cmds.size();
     const int work_per_thread = (total_work - 1) / settings.num_threads + 1;
+    std::cout << "num shards: " << settings.num_shards << std::endl;
+    std::cout << "reads to writes ratio: " << settings.reads_per_write << std::endl;
     std::cout << "total_work : " << total_work << std::endl;
     std::cout << "work_per_thread : " << work_per_thread << std::endl;
 

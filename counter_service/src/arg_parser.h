@@ -206,7 +206,7 @@ void load_cli_settings(Settings &settings, int argc, char* argv[]) {
     p.add_option({"--shards"}, "INT",
                  "Number of shards (>=1) (default: " + std::to_string(settings.num_shards) + ")",
                  [&](const std::string& v) {
-                     settings.reads_per_write = to_int(v, "--shards");
+                     settings.num_shards = to_int(v, "--shards");
                      if (settings.reads_per_write < 1)
                          throw std::runtime_error("--shards >= 1");
                  });
