@@ -165,10 +165,10 @@ public:
             int post_id = uniform_dist(engine_);
             int op_prob = static_cast<int>(uniform_dist(engine_) % (reads_per_writes + 1));
             OperationType op_type;
-            if(op_prob == 0) {
-                op_type = GET_VIEWS;
-            } else {
+            if(op_prob == 0) { // WRITE, low prob
                 op_type = ADD_VIEW;
+            } else { // READ
+                op_type = GET_VIEWS;
             }
             batch.push_back({op_type, post_id});
         }
