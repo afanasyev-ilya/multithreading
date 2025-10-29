@@ -13,14 +13,10 @@
 
 class BaseCounter {
 protected:
-    std::atomic<int> read_ops_{0};
-    std::atomic<int> write_ops_{0};
+
 public:
     virtual void add_view(int post_id) = 0;
     virtual int get_views(int post_id) = 0;
-
-    int get_read_ops() const  { return read_ops_.load(std::memory_order_relaxed); }
-    int get_write_ops() const { return write_ops_.load(std::memory_order_relaxed); }
 };
 
 class DistributedCounter: public BaseCounter {
@@ -38,14 +34,11 @@ public:
         std::unique_lock<std::shared_mutex> lock(mtx_);
 
         counters_[post_id]++;
-
-        write_ops_++;
     }
 
     int get_views(int post_id) {
         std::unique_lock<std::shared_mutex> lock(mtx_);
         auto it = counters_.find(post_id);
-        read_ops_++;
         if(it == counters_.end()) {
             return 0;
         } else {
@@ -56,43 +49,18 @@ public:
 
 
 class AtomicDistributedCounter : public BaseCounter {
-    std::unordered_map<int, std::shared_ptr<std::atomic<int>>> counters_;
-    mutable std::shared_mutex mtx_;
+    std::vector<std::atomic<int>> counters_; 
 public:
-    explicit AtomicDistributedCounter(size_t expected_posts = 0) {
-        if (expected_posts) counters_.reserve(expected_posts);
+    explicit AtomicDistributedCounter(size_t max_posts): counters_(max_posts) {
+
     }
 
     void add_view(int post_id) {
-        {
-            std::shared_lock<std::shared_mutex> rlock(mtx_);
-            auto it = counters_.find(post_id);
-            if (it != counters_.end()) {
-                it->second->fetch_add(1, std::memory_order_relaxed);
-                write_ops_.fetch_add(1, std::memory_order_relaxed);
-                return;
-            }
-        }
-
-        {
-            std::unique_lock<std::shared_mutex> wlock(mtx_);
-            auto [it, inserted] =
-                counters_.try_emplace(post_id, std::make_shared<std::atomic<int>>(0));
-            it->second->fetch_add(1, std::memory_order_relaxed);
-            write_ops_.fetch_add(1, std::memory_order_relaxed);
-        }
+        
     }
 
     int get_views(int post_id) {
-        std::shared_ptr<std::atomic<int>> ptr;
-        {
-            std::shared_lock<std::shared_mutex> rlock(mtx_);
-            auto it = counters_.find(post_id);
-            if (it != counters_.end()) ptr = it->second; // copy shared_ptr while locked
-        }
-        read_ops_.fetch_add(1, std::memory_order_relaxed);
-        if (!ptr) return 0;
-        return ptr->load(std::memory_order_relaxed);
+        return 0;
     }
 };
 
@@ -207,20 +175,11 @@ public:
 class WorkloadManager {
     BaseCounter &data_;
 
-    void print_stats(double duration_ms) {
-        int ops = data_.get_read_ops() + data_.get_write_ops();
-        double QPS = ops / (duration_ms * 1e3);
-        std::cout << "inner duration: " << duration_ms << " ms" << std::endl;
-        std::cout << "inner ops: " << ops << std::endl;
-        std::cout << "inner mQPS: " << QPS/1e6 << std::endl;
-    }
 public:
     WorkloadManager(BaseCounter &data) : data_(data) {
 
     }
     void run(const std::vector<Request> &cmds, int start_cmd, int end_cmd) {
-        //auto start_time = std::chrono::high_resolution_clock::now();
-        //std::cout << "thread borders " << start_cmd << " - " << end_cmd << std::endl;
         for(int cmd_id = start_cmd; cmd_id < end_cmd; cmd_id++) {
             const auto &cmd = cmds[cmd_id];
             if(cmd.op_type == GET_VIEWS)
@@ -228,9 +187,6 @@ public:
             if(cmd.op_type == ADD_VIEW)
                 data_.add_view(cmd.post_id);
         }
-        //auto end_time = std::chrono::high_resolution_clock::now();
-        //auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-        //print_stats(duration_ms.count());
     }
 };
 

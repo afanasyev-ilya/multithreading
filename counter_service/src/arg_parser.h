@@ -4,8 +4,8 @@
 #include <cctype>
 
 struct Settings {
-    int num_requests {100000000};
-    int max_posts {10000000};
+    int num_requests {static_cast<int>(1e8)};
+    int max_posts {static_cast<int>(1e6)};
     int reads_per_write {50};
     int max_threads {1};
     int num_shards {128};
