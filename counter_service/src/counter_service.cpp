@@ -182,10 +182,10 @@ public:
 };
 
 class WorkloadManager {
-    BaseCounter *data_;
+    std::shared_ptr<BaseCounter> data_;
 
 public:
-    WorkloadManager(BaseCounter *data) : data_(data) {
+    WorkloadManager(std::shared_ptr<BaseCounter> data) : data_(data) {
 
     }
     void run(const std::vector<Request> &cmds, int start_cmd, int end_cmd) {
@@ -203,20 +203,20 @@ int main(int argc, char* argv[]) {
     Settings settings;
     load_cli_settings(settings, argc, argv);
 
-    std::unique_ptr<BaseCounter> post_data;
+    std::shared_ptr<BaseCounter> post_data;
 
     switch(settings.ds) {
         case SHARDED_MAP:
             std::cout << "USING SHARDED MAP" << std::endl;
-            post_data = std::make_unique<ShardedMap>(settings.num_shards, settings.max_posts);
+            post_data = std::make_shared<ShardedMap>(settings.num_shards, settings.max_posts);
             break;
         case ATOMICS_ARRAY:
             std::cout << "USING ATOMICS_ARRAY" << std::endl;
-            post_data = std::make_unique<AtomicArray>(settings.max_posts);
+            post_data = std::make_shared<AtomicArray>(settings.max_posts);
             break;
         case LOCK_MAP:
             std::cout << "USING LOCK_MAP" << std::endl;
-            post_data = std::make_unique<LockMap>();
+            post_data = std::make_shared<LockMap>();
             break;
         default:
             break;
@@ -247,7 +247,7 @@ int main(int argc, char* argv[]) {
             threads.emplace_back([&, thread_idx]() {
                 int start_cmd = thread_idx * work_per_thread;
                 int end_cmd = std::min((thread_idx + 1) * work_per_thread, total_work);
-                WorkloadManager mgr(post_data.get());
+                WorkloadManager mgr(post_data);
                 mgr.run(cmds, start_cmd, end_cmd);
             });
         }
