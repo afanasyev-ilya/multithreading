@@ -87,12 +87,12 @@ public:
 class WorkloadManager {
     DistributedCounter &data_;
 
-    void print_stats(double duration_s) {
+    void print_stats(double duration_ms) {
         int ops = data_.get_read_ops() + data_.get_write_ops();
-        double QPS = ops / duration_s;
-        std::cout << "inner duration: " << duration_s << " sec" << std::endl;
+        double QPS = ops / (duration_ms * 1e3);
+        std::cout << "inner duration: " << duration_ms << " ms" << std::endl;
         std::cout << "inner ops: " << ops << std::endl;
-        std::cout << "inner QPS: " << QPS << std::endl;
+        std::cout << "inner mQPS: " << QPS/1e6 << std::endl;
     }
 public:
     WorkloadManager(DistributedCounter &data) : data_(data) {
@@ -109,24 +109,83 @@ public:
                 data_.add_view(cmd.post_id);
         }
         auto end_time = std::chrono::high_resolution_clock::now();
-        auto duration_s = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
-        print_stats(duration_s.count());
+        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        print_stats(duration_ms.count());
     }
 };
 
+struct Settings {
+    int num_requests {100000000};
+    int max_posts {10000};
+    int reads_per_write {5};
+    int num_threads {1};
+};
+
+void load_cli_settings(Settings &settings, int argc, char* argv[]) {
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--num-requests") {
+            if (i + 1 < argc) {
+                try {
+                    settings.num_requests = std::stoi(argv[++i]);
+                } catch (...) {
+                    std::cerr << "Error during parsing --num-requests arg" << std::endl;
+                    exit(1);
+                }
+            } else {
+                std::cerr << "Error: --num-requests option requires an argument." << std::endl;
+                exit(1);
+            }
+        } else if (arg == "-t" || arg == "--threads" || arg == "--num-threads") {
+            if (i + 1 < argc) {
+                try {
+                    settings.num_threads = std::stoi(argv[++i]);
+                } catch (...) {
+                    std::cerr << "Error during parsing --num-threads arg" << std::endl;
+                    exit(1);
+                }
+            } else {
+                std::cerr << "Error: --threads option requires an argument." << std::endl;
+                exit(1);
+            }
+        } else if (arg == "--posts") {
+            if (i + 1 < argc) {
+                try {
+                    settings.max_posts = std::stoi(argv[++i]);
+                } catch (...) {
+                    std::cerr << "Error during parsing --max_posts arg" << std::endl;
+                    exit(1);
+                }
+            } else {
+                std::cerr << "Error: --max_posts option requires an argument." << std::endl;
+                exit(1);
+            }
+        } else if (arg == "--reads-per-write") {
+            if (i + 1 < argc) {
+                try {
+                    settings.reads_per_write = std::stoi(argv[++i]);
+                } catch (...) {
+                    std::cerr << "Error during parsing --max_posts arg" << std::endl;
+                    exit(1);
+                }
+            } else {
+                std::cerr << "Error: --reads-per-write option requires an argument." << std::endl;
+                exit(1);
+            }
+        }
+    }   
+}
+
 int main(int argc, char* argv[]) {
-    const int num_requests = 10000000;
-    const int max_posts = 10000;
-    const int reads_per_write = 5;
-    const int num_threads = 1;
+    Settings settings;
+    load_cli_settings(settings, argc, argv);
 
     DistributedCounter post_data;
 
     RequestGenerator gen;
 
-
     // gen input data
-    auto cmds = gen.gen_batch(num_requests, max_posts, reads_per_write);
+    auto cmds = gen.gen_batch(settings.num_requests, settings.max_posts, settings.reads_per_write);
 
     // start parallel workflow
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -134,11 +193,11 @@ int main(int argc, char* argv[]) {
     std::vector<std::thread> threads;
 
     const int total_work = cmds.size();
-    const int work_per_thread = (total_work - 1) / num_threads + 1;
-    for(int thread_idx = 0; thread_idx < num_threads; thread_idx++) {
-        std::cout << "total_work : " << total_work << std::endl;
-        std::cout << "work_per_thread : " << work_per_thread << std::endl;
+    const int work_per_thread = (total_work - 1) / settings.num_threads + 1;
+    std::cout << "total_work : " << total_work << std::endl;
+    std::cout << "work_per_thread : " << work_per_thread << std::endl;
 
+    for(int thread_idx = 0; thread_idx < settings.num_threads; thread_idx++) {
         threads.emplace_back([&, thread_idx]() {
             int start_cmd = thread_idx * work_per_thread;
             int end_cmd = std::min((thread_idx + 1) * work_per_thread, total_work);
@@ -152,8 +211,8 @@ int main(int argc, char* argv[]) {
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
-    auto duration_s = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
-    std::cout << "WALL time: " << std::chrono::duration<double>(duration_s).count() << " seconds" << std::endl;
+    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    std::cout << "WALL time: " << duration_ms.count() << " ms" << std::endl;
 
     return 0;
 }
