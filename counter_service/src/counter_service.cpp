@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cassert>
 #include <memory>
+#include "arg_parser.h"
 
 class BaseCounter {
 protected:
@@ -176,68 +177,6 @@ public:
         //print_stats(duration_ms.count());
     }
 };
-
-struct Settings {
-    int num_requests {100000000};
-    int max_posts {10000};
-    int reads_per_write {5};
-    int num_threads {1};
-};
-
-void load_cli_settings(Settings &settings, int argc, char* argv[]) {
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--num-requests") {
-            if (i + 1 < argc) {
-                try {
-                    settings.num_requests = std::stoi(argv[++i]);
-                } catch (...) {
-                    std::cerr << "Error during parsing --num-requests arg" << std::endl;
-                    exit(1);
-                }
-            } else {
-                std::cerr << "Error: --num-requests option requires an argument." << std::endl;
-                exit(1);
-            }
-        } else if (arg == "-t" || arg == "--threads" || arg == "--num-threads") {
-            if (i + 1 < argc) {
-                try {
-                    settings.num_threads = std::stoi(argv[++i]);
-                } catch (...) {
-                    std::cerr << "Error during parsing --num-threads arg" << std::endl;
-                    exit(1);
-                }
-            } else {
-                std::cerr << "Error: --threads option requires an argument." << std::endl;
-                exit(1);
-            }
-        } else if (arg == "--posts") {
-            if (i + 1 < argc) {
-                try {
-                    settings.max_posts = std::stoi(argv[++i]);
-                } catch (...) {
-                    std::cerr << "Error during parsing --max_posts arg" << std::endl;
-                    exit(1);
-                }
-            } else {
-                std::cerr << "Error: --max_posts option requires an argument." << std::endl;
-                exit(1);
-            }
-        } else if (arg == "--reads-per-write") {
-            if (i + 1 < argc) {
-                try {
-                    settings.reads_per_write = std::stoi(argv[++i]);
-                } catch (...) {
-                    std::cerr << "Error during parsing --max_posts arg" << std::endl;
-                    exit(1);
-                }
-            } else {
-                std::cerr << "Error: --reads-per-write option requires an argument." << std::endl;
-                exit(1);
-            }
-        }
-    }   
-}
 
 int main(int argc, char* argv[]) {
     Settings settings;
