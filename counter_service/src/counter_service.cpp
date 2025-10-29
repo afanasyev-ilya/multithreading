@@ -225,10 +225,8 @@ int main(int argc, char* argv[]) {
     Settings settings;
     load_cli_settings(settings, argc, argv);
 
-    int shards = 128;
-
     // DistributedCounter post_data;
-    ShardedDistributedCounter post_data(shards, settings.max_posts);
+    ShardedDistributedCounter post_data(settings.num_shards, settings.max_posts);
 
     RequestGenerator gen;
 

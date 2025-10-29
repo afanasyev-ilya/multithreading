@@ -8,6 +8,7 @@ struct Settings {
     int max_posts {10000};
     int reads_per_write {50};
     int num_threads {1};
+    int num_shards {128};
 };
 
 class ArgParser {
@@ -199,6 +200,15 @@ void load_cli_settings(Settings &settings, int argc, char* argv[]) {
                      settings.reads_per_write = to_int(v, "--reads-per-write");
                      if (settings.reads_per_write < 1)
                          throw std::runtime_error("--reads-per-write must be >= 1");
+                 });
+
+    // --reads-per-write
+    p.add_option({"--shards"}, "INT",
+                 "Number of shards (>=1) (default: " + std::to_string(settings.num_shards) + ")",
+                 [&](const std::string& v) {
+                     settings.reads_per_write = to_int(v, "--shards");
+                     if (settings.reads_per_write < 1)
+                         throw std::runtime_error("--shards >= 1");
                  });
 
     try {
