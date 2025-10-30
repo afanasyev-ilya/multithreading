@@ -6,7 +6,8 @@
 enum DSType {
     SHARDED_MAP = 1,
     ATOMICS_ARRAY = 2,
-    LOCK_MAP = 3
+    LOCK_MAP = 3,
+    TBB_MAP = 4,
 };
 struct Settings {
     int num_requests {static_cast<int>(1e8)};
@@ -219,11 +220,11 @@ void load_cli_settings(Settings &settings, int argc, char* argv[]) {
 
     // --num shards
     p.add_option({"--ds"}, "INT",
-                 "Type of datastructure used, 1 = sharded, 2 = atomics, 3 = lock map, default " + std::to_string(settings.ds) + "(sharded) )",
+                 "Type of datastructure used, 1 = sharded, 2 = atomics, 3 = lock map, 4 = tbb_map, default " + std::to_string(settings.ds) + "(sharded) )",
                  [&](const std::string& v) {
                      settings.ds = static_cast<DSType>(to_int(v, "--ds"));
-                     if (settings.ds < 1 || settings.ds > 3)
-                         throw std::runtime_error("--ds >= 1");
+                     if (settings.ds < 1 || settings.ds > 4)
+                         throw std::runtime_error("--ds >= 1 and <= 4");
                  });
 
     try {

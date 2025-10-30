@@ -11,9 +11,19 @@
 #include <memory>
 #include "arg_parser.h"
 
-class BaseCounter {
-protected:
+#ifdef HAVE_TBB
+  #if __has_include(<oneapi/tbb/concurrent_hash_map.h>)
+    #include <oneapi/tbb/concurrent_hash_map.h>
+    namespace tbb_ns = oneapi::tbb;
+  #elif __has_include(<tbb/concurrent_hash_map.h>)
+    #include <tbb/concurrent_hash_map.h>
+    namespace tbb_ns = tbb;  // legacy include path
+  #else
+    #error "HAVE_TBB defined but TBB headers not found"
+  #endif
+#endif
 
+class BaseCounter {
 public:
     virtual void add_view(int post_id) = 0;
     virtual int get_views(int post_id) = 0;
@@ -136,6 +146,30 @@ public:
     }
 };
 
+#ifdef HAVE_TBB
+class TbbMap : public BaseCounter {
+    tbb::concurrent_hash_map<int,int> data_;
+public:
+    explicit TbbMap() {
+
+    }
+
+    void add_view(int post_id) {
+        tbb::concurrent_hash_map<int, int>::accessor acc;
+        data_.insert(acc, post_id);
+        ++acc->second;
+    }
+
+    int get_views(int post_id) {
+        tbb::concurrent_hash_map<int, int>::accessor acc;
+        if (data_.find(acc, post_id)) 
+            return acc->second;
+        return 0;
+    }
+};
+
+#endif // HAVE_TBB
+
 
 enum OperationType {
     GET_VIEWS = 0,
@@ -217,6 +251,10 @@ int main(int argc, char* argv[]) {
         case LOCK_MAP:
             std::cout << "USING LOCK_MAP" << std::endl;
             post_data = std::make_shared<LockMap>();
+            break;
+        case TBB_MAP:
+            std::cout << "USING TBB_MAP" << std::endl;
+            post_data = std::make_shared<TbbMap>();
             break;
         default:
             break;
