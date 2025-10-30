@@ -101,6 +101,36 @@ public:
     }
 };
 
+class WindowAggregator {
+    //const int64_t window_ms_;
+    //const int64_t bucket_ms_;
+
+    class Bucket {
+        std::unordered_map<int, int> likes_count; // post id -> like
+        std::unordered_map<int, int> views_count; // post id -> view
+    public:
+        void add_like(int post_id) {
+            likes_count[post_id]++;
+        }
+        void add_view(int post_id) {
+            views_count[post_id]++;
+        }
+    };
+
+    int num_buckets_;
+    std::vector<Bucket> buckets_;
+    int cur_bucket_;
+public:
+    WindowAggregator(int num_buckets) : num_buckets_(num_buckets), buckets_(num_buckets_), cur_bucket_(0) {};
+
+    void process_event(Event &e) {
+        if(e.type == VIEW)
+            buckets_[cur_bucket_].add_view(e.post_id);
+        else if(e.type == LIKE) 
+            buckets_[cur_bucket_].add_like(e.post_id);
+    }
+};
+
 int main(int argc, char* argv[]) {
     const int max_events_per_sec = 10;
     const int max_posts = 10000;
@@ -128,9 +158,13 @@ int main(int argc, char* argv[]) {
     std::thread gen_thread(gen_workflow);
 
     auto worker_workflow = [&]() {
-        Event new_event;
-        while(events_q.pop(new_event)) {
-            std::cout << "time: " << new_event.timestamp << ", type: " << new_event.type << ", post id: " << new_event.post_id << std::endl;
+        const int num_buckets = 5;
+        const int seconds_per_bucket = 3;
+        Event e;
+        WindowAggregator aggr(num_buckets);
+        while(events_q.pop(e)) {
+            std::cout << "time: " << e.timestamp << ", type: " << e.type << ", post id: " << e.post_id << std::endl;
+            aggr.process_event(e);
         }
     };
 
