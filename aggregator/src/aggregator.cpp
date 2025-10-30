@@ -31,8 +31,10 @@ class BlockingQueue {
     bool is_closed_{false};
 
 public:
-    void push(const T &val) {
+    bool push(const T &val) {
         std::unique_lock<std::mutex> lk(mtx_);
+        if(is_closed_)
+            return false;
 
         data_.push_back(val);
 
@@ -40,21 +42,26 @@ public:
 
         cv_not_empty_.notify_one();
     }
-    void pop(T &out) {
+    bool pop(T &out) {
         std::unique_lock<std::mutex> lk(mtx_);
-        cv_not_empty_.wait(lk, [&] { return !data_.empty(); });
-        if(!data_.empty()) {
-            out = data_.front();
-            data_.pop_front();
+        cv_not_empty_.wait(lk, [&] { return is_closed_ || !data_.empty(); });
+        if(data_.empty()) {
+            return false;
         }
+        out = data_.front();
+        data_.pop_front();
+        return true;
     }
 
     bool is_closed() {
+        std::lock_guard<std::mutex> lk(mtx_);
         return is_closed_;
     }
 
     void close() {
+        std::lock_guard<std::mutex> lk(mtx_);
         is_closed_ = true;
+        cv_not_empty_.notify_all();
     }
 };
 
@@ -87,8 +94,10 @@ public:
         for(int i = 0; i < num_events_this_seconds; i++) {
             int post_id = post_id_generator(engine_);
             EventType event_type = static_cast<EventType>(event_type_generator(engine_));
-            events_.push({event_time, event_type, post_id});
+            if(!events_.push({event_time, event_type, post_id}))
+                break;
         }
+        std::cout << "generated " << num_events_this_seconds << " events" << std::endl;
     }
 };
 
@@ -111,19 +120,16 @@ int main(int argc, char* argv[]) {
             if(now < next) {
                 std::this_thread::sleep_until(next);
             }
-
-            events_q.close();
         }
+
+        events_q.close();
     };
 
     std::thread gen_thread(gen_workflow);
 
     auto worker_workflow = [&]() {
-        while(!events_q.is_closed()) {
-            Event new_event;
-            
-            events_q.pop(new_event);
-
+        Event new_event;
+        while(events_q.pop(new_event)) {
             std::cout << "time: " << new_event.timestamp << ", type: " << new_event.type << ", post id: " << new_event.post_id << std::endl;
         }
     };
@@ -131,6 +137,7 @@ int main(int argc, char* argv[]) {
     std::thread worker_thread(worker_workflow);
 
     gen_thread.join();
+    worker_thread.join();
     
     return 0;
 }
