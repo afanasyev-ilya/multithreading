@@ -71,12 +71,22 @@ uint64_t get_now_ms_utc() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-std::string ts2date_and_time(uint64_t timestamp_ms) {
+std::string ts2date_and_time_utc(uint64_t timestamp_ms) {
     std::time_t time_sec = timestamp_ms / 1000;
     std::tm *tm_utc = std::gmtime(&time_sec);
     char buffer[30];
     std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", tm_utc);
     return std::string(buffer);
+}
+
+std::string ts2date_and_time_msk(uint64_t timestamp_ms) {
+    auto utc_time = ts2date_and_time_utc(timestamp_ms);
+    // Moscow is UTC+3
+    std::time_t time_sec = timestamp_ms / 1000 + 3 * 3600;
+    std::tm *tm_msk = std::gmtime(&time_sec);
+    char buffer[30];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", tm_msk);
+    return std::string(buffer); 
 }
 
 class EventGenerator {
@@ -116,8 +126,8 @@ class WindowAggregator {
     int bucket_sec_;
 
     struct Bucket {
-        int start_time_sec;
-        int end_time_sec;
+        uint64_t start_time_ms;
+        uint64_t end_time_ms;
         std::unordered_map<int, int> likes_count; // post id -> like
         std::unordered_map<int, int> views_count; // post id -> view
         void add_like(int post_id) {
@@ -152,10 +162,10 @@ public:
     void add_event_to_current_bucket(Event &e) {
         if(e.type == VIEW) {
             buckets_[cur_bucket_].add_view(e.post_id);
-            total_likes_count[e.post_id] += 1;
+            total_views_count[e.post_id] += 1;
         } else if(e.type == LIKE) {
             buckets_[cur_bucket_].add_like(e.post_id);
-            total_views_count[e.post_id] += 1;
+            total_likes_count[e.post_id] += 1;
         }
     }
 
@@ -163,14 +173,16 @@ public:
         static uint64_t bucket_start_time = 0;
         if(bucket_start_time == 0) {
             // set time for first bucket
-            buckets_[cur_bucket_].start_time_sec = static_cast<int>(timestamp / 1000);
-            buckets_[cur_bucket_].end_time_sec = buckets_[cur_bucket_].start_time_sec + bucket_sec_;
+            buckets_[cur_bucket_].start_time_ms = timestamp;
+            buckets_[cur_bucket_].end_time_ms = timestamp + bucket_sec_ * 1000;
             bucket_start_time = timestamp;
             return;
         }
 
-        uint64_t elapsed_sec = (timestamp - bucket_start_time) / 1000;
-        int buckets_to_advance = elapsed_sec / bucket_sec_;
+        uint64_t elapsed_ms = timestamp - bucket_start_time;
+        uint64_t bucket_duration_ms = bucket_sec_ * 1000;
+        int buckets_to_advance = elapsed_ms / bucket_duration_ms;
+        
         for(int i = 0; i < buckets_to_advance; i++) {
             cur_bucket_ = (cur_bucket_ + 1) % num_buckets_;
 
@@ -179,11 +191,12 @@ public:
 
             buckets_[cur_bucket_] = Bucket(); // reset the bucket
 
-            // set times
-            buckets_[cur_bucket_].start_time_sec = static_cast<int>(bucket_start_time / 1000 + i * bucket_sec_);
-            buckets_[cur_bucket_].end_time_sec = buckets_[cur_bucket_].start_time_sec + bucket_sec_;
+            // set times in milliseconds
+            uint64_t new_bucket_start = bucket_start_time + i * bucket_duration_ms;
+            buckets_[cur_bucket_].start_time_ms = new_bucket_start;
+            buckets_[cur_bucket_].end_time_ms = new_bucket_start + bucket_duration_ms;
 
-            bucket_start_time += bucket_sec_ * 1000;
+            bucket_start_time += bucket_duration_ms;
         }
     }
 
@@ -234,8 +247,8 @@ public:
             for(const auto &[post_id, view_count] : buckets_[i].views_count) {
                 std::cout << "Post ID: " << post_id << ", Views: " << view_count << std::endl;
             }
-            std::cout << "Bucket time range: " << buckets_[i].start_time_sec <<
-                 " - " << buckets_[i].end_time_sec << " sec (from aggregator start)" << std::endl;
+            std::cout << "Bucket time range: " << ts2date_and_time_msk(buckets_[i].start_time_ms) <<
+                 " - " << ts2date_and_time_msk(buckets_[i].end_time_ms) << " (UTC)" << std::endl;
             std::cout << "------------------------" << std::endl;
         }
     }
