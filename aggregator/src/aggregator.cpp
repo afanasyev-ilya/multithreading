@@ -67,6 +67,18 @@ public:
     }
 };
 
+uint64_t get_now_ms_utc() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+std::string ts2date_and_time(uint64_t timestamp_ms) {
+    std::time_t time_sec = timestamp_ms / 1000;
+    std::tm *tm_utc = std::gmtime(&time_sec);
+    char buffer[30];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", tm_utc);
+    return std::string(buffer);
+}
+
 class EventGenerator {
     std::random_device rd_;
     std::mt19937 engine_;
@@ -75,10 +87,6 @@ class EventGenerator {
     int max_post_id_;
 
     BlockingQueue<Event> &events_;
-    
-    uint64_t get_now_ms_utc() {
-        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    }
 public:
     EventGenerator(BlockingQueue<Event> &events, int max_events_per_sec, int max_post_id): 
         engine_(rd_()), 
@@ -108,6 +116,8 @@ class WindowAggregator {
     int bucket_sec_;
 
     struct Bucket {
+        int start_time_sec;
+        int end_time_sec;
         std::unordered_map<int, int> likes_count; // post id -> like
         std::unordered_map<int, int> views_count; // post id -> view
         void add_like(int post_id) {
@@ -152,6 +162,9 @@ public:
     void advance_to(uint64_t timestamp) {
         static uint64_t bucket_start_time = 0;
         if(bucket_start_time == 0) {
+            // set time for first bucket
+            buckets_[cur_bucket_].start_time_sec = static_cast<int>(timestamp / 1000);
+            buckets_[cur_bucket_].end_time_sec = buckets_[cur_bucket_].start_time_sec + bucket_sec_;
             bucket_start_time = timestamp;
             return;
         }
@@ -165,6 +178,11 @@ public:
             drop_stats_from_total(cur_bucket_);
 
             buckets_[cur_bucket_] = Bucket(); // reset the bucket
+
+            // set times
+            buckets_[cur_bucket_].start_time_sec = static_cast<int>(bucket_start_time / 1000 + i * bucket_sec_);
+            buckets_[cur_bucket_].end_time_sec = buckets_[cur_bucket_].start_time_sec + bucket_sec_;
+
             bucket_start_time += bucket_sec_ * 1000;
         }
     }
@@ -216,14 +234,17 @@ public:
             for(const auto &[post_id, view_count] : buckets_[i].views_count) {
                 std::cout << "Post ID: " << post_id << ", Views: " << view_count << std::endl;
             }
+            std::cout << "Bucket time range: " << buckets_[i].start_time_sec <<
+                 " - " << buckets_[i].end_time_sec << " sec (from aggregator start)" << std::endl;
+            std::cout << "------------------------" << std::endl;
         }
     }
 };
 
 int main(int argc, char* argv[]) {
-    const int max_events_per_sec = 10;
-    const int max_posts = 10000;
-    const int work_time = 20; // seconds
+    const int max_events_per_sec = 1000;
+    const int max_posts = 1000;
+    const int work_time = 30; // seconds
 
     BlockingQueue<Event> events_q;
 
@@ -247,7 +268,7 @@ int main(int argc, char* argv[]) {
     std::thread gen_thread(gen_workflow);
 
     auto worker_workflow = [&]() {
-        const int window_time = 6; // seconds
+        const int window_time = 10; // seconds
         const int seconds_per_bucket = 2; // seconds
         Event e;
         WindowAggregator aggr(window_time, seconds_per_bucket);
@@ -256,7 +277,7 @@ int main(int argc, char* argv[]) {
         }
 
         aggr.print_bucket_stats();
-        aggr.print_event_stats();
+        //aggr.print_event_stats();
     };
 
     std::thread worker_thread(worker_workflow);
