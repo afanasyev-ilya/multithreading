@@ -41,7 +41,9 @@ public:
         lk.unlock();
 
         cv_not_empty_.notify_one();
+        return true;
     }
+
     bool pop(T &out) {
         std::unique_lock<std::mutex> lk(mtx_);
         cv_not_empty_.wait(lk, [&] { return is_closed_ || !data_.empty(); });
@@ -102,13 +104,12 @@ public:
 };
 
 class WindowAggregator {
-    const int window_sec_;
-    const int bucket_sec_;
+    int window_sec_;
+    int bucket_sec_;
 
-    class Bucket {
+    struct Bucket {
         std::unordered_map<int, int> likes_count; // post id -> like
         std::unordered_map<int, int> views_count; // post id -> view
-    public:
         void add_like(int post_id) {
             likes_count[post_id]++;
         }
@@ -117,27 +118,112 @@ class WindowAggregator {
         }
     };
 
+    std::unordered_map<int, int> total_likes_count; // post id -> like
+    std::unordered_map<int, int> total_views_count; // post id -> view
+
     int num_buckets_;
     std::vector<Bucket> buckets_;
     int cur_bucket_;
 public:
     WindowAggregator(int window_sec, int bucket_sec) {
         assert(window_sec % bucket_sec == 0);
-        window_sec_ = window_sec;
+        this->window_sec_ = window_sec;
+        this->bucket_sec_ = bucket_sec;
+        this->num_buckets_ = window_sec_ / bucket_sec_;
+        this->buckets_.resize(num_buckets_);
+        this->cur_bucket_ = 0;
     }
 
     void process_event(Event &e) {
-        if(e.type == VIEW)
+        advance_to(e.timestamp);
+        add_event_to_current_bucket(e);
+    }
+
+    void add_event_to_current_bucket(Event &e) {
+        if(e.type == VIEW) {
             buckets_[cur_bucket_].add_view(e.post_id);
-        else if(e.type == LIKE) 
+            total_likes_count[e.post_id] += 1;
+        } else if(e.type == LIKE) {
             buckets_[cur_bucket_].add_like(e.post_id);
+            total_views_count[e.post_id] += 1;
+        }
+    }
+
+    void advance_to(uint64_t timestamp) {
+        static uint64_t bucket_start_time = 0;
+        if(bucket_start_time == 0) {
+            bucket_start_time = timestamp;
+            return;
+        }
+
+        uint64_t elapsed_sec = (timestamp - bucket_start_time) / 1000;
+        int buckets_to_advance = elapsed_sec / bucket_sec_;
+        for(int i = 0; i < buckets_to_advance; i++) {
+            cur_bucket_ = (cur_bucket_ + 1) % num_buckets_;
+
+            // remove the old bucket from total counts
+            drop_stats_from_total(cur_bucket_);
+
+            buckets_[cur_bucket_] = Bucket(); // reset the bucket
+            bucket_start_time += bucket_sec_ * 1000;
+        }
+    }
+
+    void drop_stats_from_total(int bucket_idx) {
+        for(const auto &[post_id, like_count] : buckets_[bucket_idx].likes_count) {
+            total_likes_count[post_id] -= like_count;
+            if(total_likes_count[post_id] <= 0) {
+                total_likes_count.erase(post_id);
+            }
+        }
+
+        for(const auto &[post_id, view_count] : buckets_[bucket_idx].views_count) {
+            total_views_count[post_id] -= view_count;
+            if(total_views_count[post_id] <= 0) {
+                total_views_count.erase(post_id);
+            }
+        }
+    }
+
+    int get_total_likes(int post_id) {
+        return total_likes_count[post_id];
+    }
+
+    int get_total_views(int post_id) {
+        return total_views_count[post_id];
+    }
+
+    void print_event_stats() {
+        std::cout << "Total Likes:" << std::endl;
+        for(const auto &[post_id, like_count] : total_likes_count) {
+            std::cout << "Post ID: " << post_id << ", Likes: " << like_count << std::endl;
+        }
+
+        std::cout << "Total Views:" << std::endl;
+        for(const auto &[post_id, view_count] : total_views_count) {
+            std::cout << "Post ID: " << post_id << ", Views: " << view_count << std::endl;
+        }
+    }
+
+    void print_bucket_stats() {
+        for(int i = 0; i < num_buckets_; i++) {
+            std::cout << "Bucket " << i << " Likes:" << std::endl;
+            for(const auto &[post_id, like_count] : buckets_[i].likes_count) {
+                std::cout << "Post ID: " << post_id << ", Likes: " << like_count << std::endl;
+            }
+
+            std::cout << "Bucket " << i << " Views:" << std::endl;
+            for(const auto &[post_id, view_count] : buckets_[i].views_count) {
+                std::cout << "Post ID: " << post_id << ", Views: " << view_count << std::endl;
+            }
+        }
     }
 };
 
 int main(int argc, char* argv[]) {
     const int max_events_per_sec = 10;
     const int max_posts = 10000;
-    const int work_time = 10;
+    const int work_time = 20; // seconds
 
     BlockingQueue<Event> events_q;
 
@@ -161,14 +247,16 @@ int main(int argc, char* argv[]) {
     std::thread gen_thread(gen_workflow);
 
     auto worker_workflow = [&]() {
-        const int num_buckets = 5;
-        const int seconds_per_bucket = 3;
+        const int window_time = 6; // seconds
+        const int seconds_per_bucket = 2; // seconds
         Event e;
-        WindowAggregator aggr(num_buckets);
+        WindowAggregator aggr(window_time, seconds_per_bucket);
         while(events_q.pop(e)) {
-            std::cout << "time: " << e.timestamp << ", type: " << e.type << ", post id: " << e.post_id << std::endl;
             aggr.process_event(e);
         }
+
+        aggr.print_bucket_stats();
+        aggr.print_event_stats();
     };
 
     std::thread worker_thread(worker_workflow);
