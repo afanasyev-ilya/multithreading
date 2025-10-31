@@ -102,8 +102,8 @@ public:
 };
 
 class WindowAggregator {
-    //const int64_t window_ms_;
-    //const int64_t bucket_ms_;
+    const int window_sec_;
+    const int bucket_sec_;
 
     class Bucket {
         std::unordered_map<int, int> likes_count; // post id -> like
@@ -121,7 +121,10 @@ class WindowAggregator {
     std::vector<Bucket> buckets_;
     int cur_bucket_;
 public:
-    WindowAggregator(int num_buckets) : num_buckets_(num_buckets), buckets_(num_buckets_), cur_bucket_(0) {};
+    WindowAggregator(int window_sec, int bucket_sec) {
+        assert(window_sec % bucket_sec == 0);
+        window_sec_ = window_sec;
+    }
 
     void process_event(Event &e) {
         if(e.type == VIEW)
